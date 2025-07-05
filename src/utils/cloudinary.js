@@ -36,12 +36,10 @@ const deleteFromCloudinary = async (FilePath) => {
         })
         
         console.log("the file is deleted form cloudinary")
-        fs.unlinkSync(FilePath) 
 
         return response
 
     } catch (error) {
-        fs.unlinkSync(FilePath) // remove the locally saved temp file as the upload is failed
         return null;
     }
 }

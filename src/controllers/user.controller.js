@@ -1,7 +1,7 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/apiError.js";
 import { User } from "../models/user.model.js"
-import { uploadOnCloudinary } from "../utils/cloudinary.js"
+import { uploadOnCloudinary, deleteFromCloudinary } from "../utils/cloudinary.js"
 import { ApiResponse } from "../utils/apiResponse.js"
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
@@ -19,25 +19,22 @@ const generateAccessAndRefreshToken = async (userId) => {
         return { accessToken , refreshToken }
 
     } catch (error) {
-        console.log(error.message)
         throw new ApiError(500, "Something went wrong while generating tokens")
     }
 }
 
 const RegisterUser = asyncHandler( async (req, res) => {
-    // get user details form frontend
+    // get user details from frontend
     // verify user details - not empty
     // check if user already exists: username, email
     // check for images, avatar
     // upload them to cloudiary
     // create user object - create entry in db
-    // remove password and refresh token field form response
+    // remove password and refresh token field from response
     // check for user creation
     // return response
 
     const {fullName, email, username, password} = await req.body
-    // console.log(req.body)
-    // console.log(email)
 
     if(
         [fullName,email,username,password].some((feild)=>feild?.trim() === "")
@@ -48,16 +45,12 @@ const RegisterUser = asyncHandler( async (req, res) => {
     const existedUser = await User.findOne({
         $or: [{ username }, { email }]
     })
-    // console.log("existed user:",existedUser)
 
     if (existedUser) {
         throw new ApiError(409, "User already exists")
     }
 
     const avatarLocalPath = req.files?.avatar[0]?.path
-    // console.log("avatar", avatarLocalPath)
-    // const coverImageLocalPath = req.files?.coverImage[0]?.path
-    // console.log("avatar", coverImageLocalPath)
 
     let coverImageLocalPath;
     if(req.files && Array.isArray(req.files.coverImage) && req.files.coverImage.length > 0){
@@ -69,9 +62,7 @@ const RegisterUser = asyncHandler( async (req, res) => {
     }
 
     const avatar = await uploadOnCloudinary(avatarLocalPath)
-    // console.log("avatar", avatar)
     const coverImage = await uploadOnCloudinary(coverImageLocalPath)
-    // console.log("avatar", coverImage)
 
     if(!avatar){
         throw new ApiError(400, "Avatar file is required")
@@ -85,8 +76,6 @@ const RegisterUser = asyncHandler( async (req, res) => {
         avatar: avatar.url,
         coverImage: coverImage?.url || "",
     })
-
-    // console.log("new user id: ",user._id)
 
     const createdUser = await User.findById(user._id).select("-password -refreshToken")
 
@@ -107,8 +96,6 @@ const LoginUser = asyncHandler( async (req, res) => {
     // check if the password is correct
     // send access token and refresh token to the user in cookes(secure)
     // res logged in 
-
-    console.log(req.body)
 
     const {username, email, password} = req.body
 
@@ -156,8 +143,8 @@ const LogoutUser = asyncHandler( async ( req , res ) => {
     User.findByIdAndUpdate(
         req.user._id,
         {
-            $set: {
-                refreshToken: undefined
+            $unset: {
+                refreshToken: 1 // this remove feild from documnet
             }
         },
         {
@@ -183,8 +170,6 @@ const LogoutUser = asyncHandler( async ( req , res ) => {
 const RefreshAccessToken = asyncHandler( async ( req , res ) => {
 
     const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken
-    
-    console.log(incomingRefreshToken)
 
     if (!incomingRefreshToken){
         throw new ApiError(401, "Unauthorized request")
@@ -192,11 +177,7 @@ const RefreshAccessToken = asyncHandler( async ( req , res ) => {
 
     const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET)
 
-    console.log(decodedToken)
-
     const user = await User.findById(decodedToken?._id).select("-password")
-
-    console.log(user)
 
     if (!user){
         throw new ApiError(401, "Invalid Refresh Token")
@@ -299,8 +280,7 @@ const UpdateUserAvatar = asyncHandler( async ( req , res ) => {
         throw new ApiError(400, "Error While Uploading Avatar")
     }
 
-    await deleteFromCloudinary(req.user?.avatar.url)
-
+    await deleteFromCloudinary(req.user?.avatar)
 
     const user = await User.findByIdAndUpdate(
         req.user?._id, 
@@ -335,7 +315,7 @@ const UpdateUserCoverImage = asyncHandler( async ( req , res ) => {
         throw new ApiError(400, "Error While Uploading Cover Image")
     }
 
-    await deleteFromCloudinary(req.user?.coverImage?.url)
+    await deleteFromCloudinary(req.user?.coverImage)
 
     const user = await User.findByIdAndUpdate(
         req.user?._id,
@@ -372,7 +352,7 @@ const GetUserChannelProfile = asyncHandler( async ( req, res ) => {
         },
         {
             $lookup: {
-                form: "subscriptions",
+                from: "subscriptions",
                 localField: "_id",
                 foreignField: "channel",
                 as: "subscribers"
@@ -380,7 +360,7 @@ const GetUserChannelProfile = asyncHandler( async ( req, res ) => {
         },
         {
             $lookup: {
-                form: "subscriptions",
+                from: "subscriptions",
                 localField: "_id",
                 foreignField: "subscriber",
                 as: "subscribedTo"
@@ -417,8 +397,6 @@ const GetUserChannelProfile = asyncHandler( async ( req, res ) => {
         }
     ])
 
-    console.log(channel);
-
     if(!channel?.length) {
         throw new ApiError(404, "Channel Does not Exists")
     }
@@ -435,25 +413,23 @@ const GetUserChannelProfile = asyncHandler( async ( req, res ) => {
 
 const GetWatchHistory = asyncHandler( async ( req , res ) => {
     
-    const userId = req.user._id
 
-    const user = User.aggregate([
+    const user = await User.aggregate([
         {
             $match: {
-                // _id: new mongoose.Types.ObjectId(req.user?._id)
-                _id: userId
+                _id: new mongoose.Types.ObjectId(req.user?._id)
             }
         },
         {
             $lookup: {
-                form: "videos",
+                from: "videos",
                 localField: "watchHistory",
                 foreignField: "_id",
                 as: "watchHistory",
                 pipeline: [
                     {
                         $lookup: {
-                            form: "users",
+                            from: "users",
                             localField: "owner",
                             foreignField: "_id",
                             as: "owner",
@@ -479,6 +455,10 @@ const GetWatchHistory = asyncHandler( async ( req , res ) => {
             }
         }
     ])
+
+    if (!user || user.length === 0) {
+        throw new ApiError(404, "User not found or no watch history available.");
+    }
 
     return res
     .status(200)
